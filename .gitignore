@@ -1,0 +1,6 @@
+﻿obj/
+launchSettings.json
+*.csproj
+*_c
+.idea
+*.sln
