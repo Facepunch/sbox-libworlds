@@ -98,12 +98,15 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		_cellsToLoad.Clear();
 		_cellsToUnload.Clear();
 
-		foreach ( var origin in Scene.GetAllComponents<LoadOrigin>() )
+		if ( !Game.IsEditor || Game.IsPlaying || Game.IsPaused )
 		{
-			_loadOrigins.Add( GetCellIndex( origin.Transform.Position ) );
+			foreach ( var origin in Scene.GetAllComponents<LoadOrigin>() )
+			{
+				_loadOrigins.Add( GetCellIndex( origin.Transform.Position ) );
+			}
 		}
 
-		if ( _editorCameraTransform is { Position: { } editorCamPos } )
+		if ( Game.IsEditor && !Game.IsPlaying && _editorCameraTransform is { Position: { } editorCamPos } )
 		{
 			_loadOrigins.Add( GetCellIndex( editorCamPos ) );
 		}
