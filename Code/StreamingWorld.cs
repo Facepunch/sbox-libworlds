@@ -29,7 +29,7 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 
 			if ( _parent is not null )
 			{
-				_parent.CellLoaded -= Parent_CellLoaded;
+				_parent.CellReady -= Parent_CellReady;
 				_parent.CellUnloaded -= Parent_CellUnloaded;
 			}
 
@@ -37,7 +37,7 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 
 			if ( _parent is not null )
 			{
-				_parent.CellLoaded += Parent_CellLoaded;
+				_parent.CellReady += Parent_CellReady;
 				_parent.CellUnloaded += Parent_CellUnloaded;
 			}
 		}
@@ -62,7 +62,7 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 	/// </summary>
 	[Property] public int LoadRadius { get; set; } = 4;
 
-	internal event Action<Vector3Int>? CellLoaded;
+	internal event Action<Vector3Int>? CellReady;
 	internal event Action<Vector3Int>? CellUnloaded;
 
 	private void UpdateDimensions()
@@ -79,7 +79,7 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 	{
 		if ( _parent is not null )
 		{
-			_parent.CellLoaded += Parent_CellLoaded;
+			_parent.CellReady += Parent_CellReady;
 			_parent.CellUnloaded += Parent_CellUnloaded;
 		}
 	}
@@ -176,11 +176,16 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		}
 	}
 
-	private bool ShouldEnableCell( Vector3Int cellIndex ) => !AreParentCellsLoaded( cellIndex );
+	private bool ShouldEnableCell( Vector3Int cellIndex ) => !AreParentCellsReady( cellIndex );
 
-	public bool IsCellLoaded( Vector3Int cellIndex ) => _cells.TryGetValue( cellIndex, out var cell ) && cell is { IsValid: true };
+	public CellState GetCellState( Vector3Int cellIndex )
+	{
+		return _cells.TryGetValue( cellIndex, out var cell ) && cell is { IsValid: true }
+			? cell.State
+			: CellState.Unloaded;
+	}
 
-	private bool AreParentCellsLoaded( Vector3Int cellIndex )
+	private bool AreParentCellsReady( Vector3Int cellIndex )
 	{
 		if ( Parent is not { IsValid: true } parent )
 		{
@@ -193,7 +198,7 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		for ( var y = 0; y < 2; y++ )
 		for ( var x = 0; x < 2; x++ )
 		{
-			if ( parent.IsCellLoaded( parentIndex + new Vector3Int( x, y, z ) ) ) continue;
+			if ( parent.GetCellState( parentIndex + new Vector3Int( x, y, z ) ) == CellState.Ready ) continue;
 
 			return false;
 		}
@@ -221,7 +226,11 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		cell.GameObject.Enabled = ShouldEnableCell( cellIndex );
 
 		Scene.GetAllComponents<ICellLoader>().FirstOrDefault()?.LoadCell( cell );
-		CellLoaded?.Invoke( cellIndex );
+
+		if ( cell.State != CellState.Loading )
+		{
+			cell.MarkReady();
+		}
 	}
 
 	private void UnloadCell( Vector3Int cellIndex )
@@ -244,7 +253,12 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		return cellIndex * 2;
 	}
 
-	private void Parent_CellLoaded( Vector3Int parentCellIndex )
+	internal void DispatchCellReady( Vector3Int cellIndex )
+	{
+		CellReady?.Invoke( cellIndex );
+	}
+
+	private void Parent_CellReady( Vector3Int parentCellIndex )
 	{
 		var cellIndex = FromParentCellIndex( parentCellIndex );
 
@@ -253,7 +267,6 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		if ( ShouldEnableCell( cellIndex ) ) return;
 
 		cell.GameObject.Enabled = false;
-		CellUnloaded?.Invoke( cellIndex );
 	}
 
 	private void Parent_CellUnloaded( Vector3Int parentCellIndex )
@@ -265,7 +278,6 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		if ( !ShouldEnableCell( cellIndex ) ) return;
 
 		cell.GameObject.Enabled = true;
-		CellLoaded?.Invoke( cellIndex );
 	}
 
 	protected override void DrawGizmos()
@@ -280,7 +292,7 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		{
 			Gizmo.Transform = cell.Transform.World;
 
-			if ( AreParentCellsLoaded( index ) )
+			if ( AreParentCellsReady( index ) )
 			{
 				Gizmo.Draw.SolidBox( new BBox( 0f, new Vector3( CellSize, CellSize, Is2D ? 2048f : CellHeight ) ) );
 			}
