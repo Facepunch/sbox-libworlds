@@ -15,8 +15,9 @@ public sealed class WorldCell : Component
 
 	protected override void DrawGizmos()
 	{
-		if ( !Gizmo.IsSelected ) return;
+		// if ( !Gizmo.IsSelected ) return;
 
-		Gizmo.Draw.LineBBox( new BBox( 0f, new Vector3( World.CellSize, World.CellSize, World.Is2D ? 0f : World.CellHeight ) ) );
+		Gizmo.Draw.Color = new ColorHsv( World.Level * 30f, 1f, 1f, 0.25f );
+		Gizmo.Draw.LineBBox( new BBox( 0f, new Vector3( World.CellSize, World.CellSize, World.Is2D ? 2048f : World.CellHeight ) ) );
 	}
 }
