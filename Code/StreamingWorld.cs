@@ -142,7 +142,6 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 			UnloadCell( cellIndex );
 		}
 
-
 		foreach ( var cellIndex in _cellsToLoad )
 		{
 			LoadCell( cellIndex );
@@ -176,7 +175,7 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 
 	private bool ShouldEnableCell( Vector3Int cellIndex ) => !AreParentCellsLoaded( cellIndex );
 
-	public bool IsCellLoaded( Vector3Int cellIndex ) => _cells.TryGetValue( cellIndex, out var cell ) && cell.IsValid;
+	public bool IsCellLoaded( Vector3Int cellIndex ) => _cells.TryGetValue( cellIndex, out var cell ) && cell is { IsValid: true };
 
 	private bool AreParentCellsLoaded( Vector3Int cellIndex )
 	{
@@ -191,10 +190,9 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		for ( var y = 0; y < 2; y++ )
 		for ( var x = 0; x < 2; x++ )
 		{
-			if ( !parent.IsCellLoaded( parentIndex + new Vector3Int( x, y, z ) ) )
-			{
-				return false;
-			}
+			if ( parent.IsCellLoaded( parentIndex + new Vector3Int( x, y, z ) ) ) continue;
+
+			return false;
 		}
 
 		return true;
@@ -248,10 +246,10 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		var cellIndex = FromParentCellIndex( parentCellIndex );
 
 		if ( !_cells.TryGetValue( cellIndex, out var cell ) ) return;
-		if ( !cell.Enabled ) return;
+		if ( !cell.GameObject.Enabled ) return;
 		if ( ShouldEnableCell( cellIndex ) ) return;
 
-		cell.Enabled = false;
+		cell.GameObject.Enabled = false;
 		CellUnloaded?.Invoke( cellIndex );
 	}
 
@@ -260,16 +258,34 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		var cellIndex = FromParentCellIndex( parentCellIndex );
 
 		if ( !_cells.TryGetValue( cellIndex, out var cell ) ) return;
-		if ( cell.Enabled ) return;
+		if ( cell.GameObject.Enabled ) return;
 		if ( !ShouldEnableCell( cellIndex ) ) return;
 
-		cell.Enabled = true;
+		cell.GameObject.Enabled = true;
 		CellLoaded?.Invoke( cellIndex );
 	}
 
 	protected override void DrawGizmos()
 	{
 		_editorCameraTransform = Gizmo.CameraTransform;
+
+		if ( !Gizmo.IsSelected ) return;
+
+		Gizmo.Draw.Color = new ColorHsv( Level * 30f, 1f, 1f, 0.25f );
+
+		foreach ( var (index, cell) in _cells )
+		{
+			Gizmo.Transform = cell.Transform.World;
+
+			if ( AreParentCellsLoaded( index ) )
+			{
+				Gizmo.Draw.SolidBox( new BBox( 0f, new Vector3( CellSize, CellSize, Is2D ? 2048f : CellHeight ) ) );
+			}
+			else
+			{
+				Gizmo.Draw.LineBBox( new BBox( 0f, new Vector3( CellSize, CellSize, Is2D ? 2048f : CellHeight ) ) );
+			}
+		}
 	}
 
 	private IEnumerable<StreamingWorld> Hierarchy

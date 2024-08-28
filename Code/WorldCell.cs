@@ -12,12 +12,4 @@ public sealed class WorldCell : Component
 	public StreamingWorld World => _world ??=
 		Components.Get<StreamingWorld>( FindMode.Enabled | FindMode.Disabled | FindMode.InParent )
 			?? throw new Exception( $"{nameof(WorldCell)} must be a child object of a {nameof(StreamingWorld)}." );
-
-	protected override void DrawGizmos()
-	{
-		// if ( !Gizmo.IsSelected ) return;
-
-		Gizmo.Draw.Color = new ColorHsv( World.Level * 30f, 1f, 1f, 0.25f );
-		Gizmo.Draw.LineBBox( new BBox( 0f, new Vector3( World.CellSize, World.CellSize, World.Is2D ? 2048f : World.CellHeight ) ) );
-	}
 }
