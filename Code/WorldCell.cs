@@ -10,12 +10,31 @@ public enum CellState
 	Ready
 }
 
+public delegate void WorldCellHideStateChanged( WorldCell cell, bool hidden );
+
 public sealed class WorldCell : Component
 {
+	private bool _isHidden;
+
 	[Property]
 	public Vector3Int Index { get; set; }
 
 	public CellState State { get; private set; }
+
+	public bool IsHidden
+	{
+		get => _isHidden;
+		set
+		{
+			if ( _isHidden == value ) return;
+
+			_isHidden = value;
+
+			HideStateChanged?.Invoke( this, value );
+		}
+	}
+
+	public event WorldCellHideStateChanged? HideStateChanged;
 
 	private StreamingWorld? _world;
 
@@ -39,6 +58,7 @@ public sealed class WorldCell : Component
 
 		State = CellState.Ready;
 
+		IsHidden = World.ShouldHideCell( Index );
 		World.DispatchCellReady( Index );
 	}
 }

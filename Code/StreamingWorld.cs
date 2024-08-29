@@ -98,18 +98,7 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		_cellsToLoad.Clear();
 		_cellsToUnload.Clear();
 
-		if ( !Game.IsEditor || Game.IsPlaying || Game.IsPaused )
-		{
-			foreach ( var origin in Scene.GetAllComponents<LoadOrigin>() )
-			{
-				_loadOrigins.Add( GetCellIndex( origin.Transform.Position ) );
-			}
-		}
-
-		if ( Game.IsEditor && !Game.IsPlaying && _editorCameraTransform is { Position: { } editorCamPos } )
-		{
-			_loadOrigins.Add( GetCellIndex( editorCamPos ) );
-		}
+		FindLoadOrigins();
 
 		foreach ( var loadOrigin in _loadOrigins )
 		{
@@ -151,6 +140,32 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		}
 	}
 
+	private void FindLoadOrigins()
+	{
+		if ( !Game.IsEditor || Game.IsPlaying || Game.IsPaused )
+		{
+			foreach ( var origin in Scene.GetAllComponents<LoadOrigin>() )
+			{
+				if ( origin.MaxLevel is { } maxLevel && Level > maxLevel )
+				{
+					continue;
+				}
+
+				_loadOrigins.Add( GetCellIndex( origin.Transform.Position ) );
+			}
+
+			foreach ( var camera in Scene.GetAllComponents<CameraComponent>() )
+			{
+				_loadOrigins.Add( GetCellIndex( camera.Transform.Position ) );
+			}
+		}
+
+		if ( Game.IsEditor && !Game.IsPlaying && _editorCameraTransform is { Position: var editorCamPos } )
+		{
+			_loadOrigins.Add( GetCellIndex( editorCamPos ) );
+		}
+	}
+
 	public Vector3Int GetCellIndex( Vector3 worldPosition )
 	{
 		var localPos = Transform.World.PointToLocal( worldPosition );
@@ -176,7 +191,7 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		}
 	}
 
-	private bool ShouldEnableCell( Vector3Int cellIndex ) => !AreParentCellsReady( cellIndex );
+	internal bool ShouldHideCell( Vector3Int cellIndex ) => AreParentCellsReady( cellIndex );
 
 	public CellState GetCellState( Vector3Int cellIndex )
 	{
@@ -214,7 +229,8 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		{
 			Transform = { Position = new Vector3( cellIndex.x * CellSize, cellIndex.y * CellSize, cellIndex.z * CellHeight ) },
 			Parent = GameObject,
-			Flags = GameObjectFlags.NotSaved
+			Flags = GameObjectFlags.NotSaved | GameObjectFlags.Hidden,
+			NetworkMode = NetworkMode.Never
 		};
 
 		var cell = go.Components.Create<WorldCell>();
@@ -223,13 +239,17 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 
 		_cells.Add( cellIndex, cell );
 
-		cell.GameObject.Enabled = ShouldEnableCell( cellIndex );
+		go.Enabled = true;
 
 		Scene.GetAllComponents<ICellLoader>().FirstOrDefault()?.LoadCell( cell );
 
 		if ( cell.State != CellState.Loading )
 		{
 			cell.MarkReady();
+		}
+		else
+		{
+			cell.IsHidden = true;
 		}
 	}
 
@@ -263,10 +283,9 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		var cellIndex = FromParentCellIndex( parentCellIndex );
 
 		if ( !_cells.TryGetValue( cellIndex, out var cell ) ) return;
-		if ( !cell.GameObject.Enabled ) return;
-		if ( ShouldEnableCell( cellIndex ) ) return;
+		if ( cell.IsHidden || !ShouldHideCell( cellIndex ) ) return;
 
-		cell.GameObject.Enabled = false;
+		cell.IsHidden = true;
 	}
 
 	private void Parent_CellUnloaded( Vector3Int parentCellIndex )
@@ -274,10 +293,9 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		var cellIndex = FromParentCellIndex( parentCellIndex );
 
 		if ( !_cells.TryGetValue( cellIndex, out var cell ) ) return;
-		if ( cell.GameObject.Enabled ) return;
-		if ( !ShouldEnableCell( cellIndex ) ) return;
+		if ( !cell.IsHidden || ShouldHideCell( cellIndex ) ) return;
 
-		cell.GameObject.Enabled = true;
+		cell.IsHidden = false;
 	}
 
 	protected override void DrawGizmos()
@@ -287,18 +305,30 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		if ( !Gizmo.IsSelected ) return;
 
 		Gizmo.Draw.Color = new ColorHsv( Level * 30f, 1f, 1f, 0.25f );
+		Gizmo.Draw.IgnoreDepth = true;
 
 		foreach ( var (index, cell) in _cells )
 		{
 			Gizmo.Transform = cell.Transform.World;
 
+			var margin = CellSize / 64f;
+			var bbox = new BBox( margin, new Vector3( CellSize, CellSize, Is2D ? margin * 2f : cell.World.CellSize ) - margin );
+
 			if ( AreParentCellsReady( index ) )
 			{
-				Gizmo.Draw.SolidBox( new BBox( 0f, new Vector3( CellSize, CellSize, Is2D ? 2048f : CellHeight ) ) );
+				Gizmo.Draw.SolidBox( bbox );
 			}
 			else
 			{
-				Gizmo.Draw.LineBBox( new BBox( 0f, new Vector3( CellSize, CellSize, Is2D ? 2048f : CellHeight ) ) );
+				Gizmo.Draw.LineBBox( bbox );
+
+				if ( cell.State == CellState.Loading )
+				{
+					foreach ( var corner in bbox.Corners )
+					{
+						Gizmo.Draw.Line( corner, bbox.Center );
+					}
+				}
 			}
 		}
 	}
