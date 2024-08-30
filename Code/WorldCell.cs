@@ -36,8 +36,9 @@ public sealed class WorldCell : Component, Component.ExecuteInEditor
 		}
 	}
 
-	internal bool IsMaskedByParent { get; private set; }
-	internal bool IsMaskedByChild { get; private set; }
+	internal bool IsParentOutOfRange { get; set; }
+	internal bool IsMaskedByParent { get; set; }
+	internal bool IsOutOfRange { get; set; }
 
 	public event WorldCellOpacityChanged? OpacityChanged;
 
@@ -65,19 +66,30 @@ public sealed class WorldCell : Component, Component.ExecuteInEditor
 		State = CellState.Unloaded;
 	}
 
-	protected override void OnUpdate()
+	internal void UpdateOpacity()
 	{
-		IsMaskedByParent = World.AreParentCellsVisible( Index );
-		IsMaskedByChild = World.IsChildCellVisible( Index );
+		var targetOpacity = GetTargetOpacity();
+		Opacity += Math.Sign( targetOpacity - Opacity ) * Time.Delta * 0.5f;
+	}
 
-		var targetOpacity = IsMaskedByParent || IsMaskedByChild || State == CellState.Loading ? 0f : GetDistanceOpacity();
-
-		Opacity += Math.Sign( targetOpacity - Opacity ) * Time.Delta;
-
-		if ( State == CellState.Unloaded && Opacity <= 0f )
+	private float GetTargetOpacity()
+	{
+		if ( State != CellState.Ready )
 		{
-			GameObject.Destroy();
+			return 0f;
 		}
+
+		if ( IsParentOutOfRange )
+		{
+			return 1f;
+		}
+
+		if ( IsOutOfRange && World.CanFadeOutCell( Index ) || IsMaskedByParent )
+		{
+			return 0f;
+		}
+
+		return GetDistanceOpacity();
 	}
 
 	private float GetDistanceOpacity()

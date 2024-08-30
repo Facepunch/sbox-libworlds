@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text.Json.Serialization;
 
 namespace Sandbox.Worlds;
@@ -80,55 +81,9 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 
 	protected override void OnUpdate()
 	{
-		UpdateDimensions();
+		if ( HasParent ) return;
 
-		_loadOrigins.Clear();
-
-		_cellsToLoad.Clear();
-		_cellsToUnload.Clear();
-
-		FindLoadOrigins();
-
-		foreach ( var loadOrigin in _loadOrigins )
-		{
-			LoadCellsAround( loadOrigin );
-		}
-
-		var unloadRadius = LoadRadius + 1;
-
-		foreach ( var cellIndex in _cells.Keys )
-		{
-			if ( _cellsToLoad.Remove( cellIndex ) )
-			{
-				continue;
-			}
-
-			var inRange = false;
-
-			foreach ( var loadOrigin in _loadOrigins )
-			{
-				if ( (loadOrigin - cellIndex).LengthSquared <= unloadRadius * unloadRadius )
-				{
-					inRange = true;
-					break;
-				}
-			}
-
-			if ( !inRange )
-			{
-				_cellsToUnload.Add( cellIndex );
-			}
-		}
-
-		foreach ( var cellIndex in _cellsToUnload )
-		{
-			UnloadCell( cellIndex );
-		}
-
-		foreach ( var cellIndex in _cellsToLoad )
-		{
-			LoadCell( cellIndex );
-		}
+		UpdateCells();
 	}
 
 	private void FindLoadOrigins()
@@ -182,20 +137,16 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		}
 	}
 
-	public float GetCellOpacity( Vector3Int cellIndex )
-	{
-		return _cells.TryGetValue( cellIndex, out var cell ) && cell is { IsValid: true, State: CellState.Ready }
-			? cell.Opacity : 0f;
-	}
-
-	internal bool AreParentCellsVisible( Vector3Int cellIndex )
+	internal (bool AllVisible, bool AnyOutOfRange) GetParentState( Vector3Int cellIndex )
 	{
 		if ( Parent is not { IsValid: true } parent )
 		{
-			return false;
+			return (false, false);
 		}
 
 		var parentIndex = ToParentCellIndex( cellIndex );
+		var allVisible = true;
+		var anyOutOfRange = false;
 
 		for ( var z = 0; z < (Is2D ? 1 : 2); z++ )
 		for ( var y = 0; y < 2; y++ )
@@ -203,30 +154,30 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		{
 			var parentCellIndex = parentIndex + new Vector3Int( x, y, z );
 
-			if ( parent.GetCellOpacity( parentCellIndex ) >= 1f ) continue;
-			if ( parent._cells.TryGetValue( parentCellIndex, out var cell ) && cell.IsMaskedByParent ) continue;
+			if ( !parent._cells.TryGetValue( parentCellIndex, out var cell ) )
+			{
+				allVisible = false;
+				break;
+			}
 
-			return false;
+			anyOutOfRange |= cell.IsOutOfRange;
+			allVisible &= cell.Opacity >= 1f || cell is { IsMaskedByParent: true };
 		}
 
-		return true;
+		return (allVisible, anyOutOfRange);
 	}
 
-	internal bool IsChildCellVisible( Vector3Int cellIndex )
+	internal bool CanFadeOutCell( Vector3Int cellIndex )
 	{
-		if ( Child is not { IsValid: true } child )
-		{
-			return false;
-		}
-
 		var childIndex = ToChildCellIndex( cellIndex );
 
-		return child.GetCellOpacity( childIndex ) >= 1f || child.IsChildCellVisible( childIndex );
-	}
+		if ( !Child.IsValid() || !Child._cells.TryGetValue( childIndex, out var cell ) )
+		{
+			// Child doesn't exist! No hope of it fading in.
+			return true;
+		}
 
-	public bool IsCellReady( Vector3Int cellIndex )
-	{
-		return _cells.TryGetValue( cellIndex, out var cell ) && cell.State == CellState.Ready;
+		return cell is { IsOutOfRange: false, Opacity: >= 1f };
 	}
 
 	private void LoadCell( Vector3Int cellIndex )
@@ -265,6 +216,8 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		Scene.GetAllComponents<ICellLoader>().FirstOrDefault()?.UnloadCell( cell );
 
 		cell.Unload();
+
+		cell.GameObject.Destroy();
 	}
 
 	private static Vector3Int ToParentCellIndex( Vector3Int cellIndex )
@@ -274,7 +227,11 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 
 	private static Vector3Int ToChildCellIndex( Vector3Int cellIndex )
 	{
-		return (cellIndex - 1) / 2;
+		if ( cellIndex.x < 0 ) cellIndex.x -= 1;
+		if ( cellIndex.y < 0 ) cellIndex.y -= 1;
+		if ( cellIndex.z < 0 ) cellIndex.z -= 1;
+
+		return cellIndex / 2;
 	}
 
 	protected override void DrawGizmos()
@@ -283,30 +240,23 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 
 		if ( !Gizmo.IsSelected ) return;
 
-		Gizmo.Draw.Color = new ColorHsv( Level * 30f, 1f, 1f, 0.25f );
 		Gizmo.Draw.IgnoreDepth = true;
 
-		foreach ( var (index, cell) in _cells )
+		foreach ( var cell in _cells.Values )
 		{
 			Gizmo.Transform = cell.Transform.World;
+			Gizmo.Draw.Color = new ColorHsv( Level * 30f, 1f, 1f, cell.Opacity * 0.25f );
 
 			var margin = CellSize / 64f;
 			var bbox = new BBox( margin, new Vector3( CellSize, CellSize, Is2D ? margin * 2f : cell.World.CellSize ) - margin );
 
-			if ( AreParentCellsVisible( index ) )
-			{
-				Gizmo.Draw.SolidBox( bbox );
-			}
-			else
-			{
-				Gizmo.Draw.LineBBox( bbox );
+			Gizmo.Draw.LineBBox( bbox );
 
-				if ( cell.State == CellState.Loading )
+			if ( cell.State == CellState.Loading )
+			{
+				foreach ( var corner in bbox.Corners )
 				{
-					foreach ( var corner in bbox.Corners )
-					{
-						Gizmo.Draw.Line( corner, bbox.Center );
-					}
+					Gizmo.Draw.Line( corner, bbox.Center );
 				}
 			}
 		}
@@ -324,6 +274,72 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 			{
 				yield return parent;
 			}
+		}
+	}
+
+	private void UpdateCells()
+	{
+		UpdateDimensions();
+
+		_loadOrigins.Clear();
+
+		_cellsToLoad.Clear();
+		_cellsToUnload.Clear();
+
+		FindLoadOrigins();
+
+		foreach ( var loadOrigin in _loadOrigins )
+		{
+			LoadCellsAround( loadOrigin );
+		}
+
+		var unloadRadius = LoadRadius + 1;
+
+		foreach ( var cell in _cells.Values )
+		{
+			if ( _cellsToLoad.Remove( cell.Index ) )
+			{
+				continue;
+			}
+
+			var inRange = false;
+
+			foreach ( var loadOrigin in _loadOrigins )
+			{
+				if ( (loadOrigin - cell.Index).LengthSquared <= unloadRadius * unloadRadius )
+				{
+					inRange = true;
+					break;
+				}
+			}
+
+			cell.IsOutOfRange = !inRange;
+
+			if ( !inRange && cell.Opacity <= 0f )
+			{
+				_cellsToUnload.Add( cell.Index );
+			}
+		}
+
+		foreach ( var cellIndex in _cellsToUnload )
+		{
+			UnloadCell( cellIndex );
+		}
+
+		foreach ( var cellIndex in _cellsToLoad )
+		{
+			LoadCell( cellIndex );
+		}
+
+		foreach ( var cell in _cells.Values )
+		{
+			cell.UpdateOpacity();
+			(cell.IsMaskedByParent, cell.IsParentOutOfRange) = GetParentState( cell.Index );
+		}
+
+		if ( Child is { } child )
+		{
+			child.UpdateCells();
 		}
 	}
 }
