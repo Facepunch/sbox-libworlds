@@ -10,31 +10,35 @@ public enum CellState
 	Ready
 }
 
-public delegate void WorldCellHideStateChanged( WorldCell cell, bool hidden );
+public delegate void WorldCellOpacityChanged( WorldCell cell, float opacity );
 
-public sealed class WorldCell : Component
+public sealed class WorldCell : Component, Component.ExecuteInEditor
 {
-	private bool _isHidden;
+	private float _opacity = 0f;
 
 	[Property]
 	public Vector3Int Index { get; set; }
 
 	public CellState State { get; private set; }
 
-	public bool IsHidden
+	public float Opacity
 	{
-		get => _isHidden;
+		get => _opacity;
 		set
 		{
-			if ( _isHidden == value ) return;
+			value = Math.Clamp( value, 0f, 1f );
 
-			_isHidden = value;
+			if ( _opacity == value ) return;
 
-			HideStateChanged?.Invoke( this, value );
+			_opacity = value;
+
+			OpacityChanged?.Invoke( this, value );
 		}
 	}
 
-	public event WorldCellHideStateChanged? HideStateChanged;
+	internal bool IsMasked { get; private set; }
+
+	public event WorldCellOpacityChanged? OpacityChanged;
 
 	private StreamingWorld? _world;
 
@@ -52,13 +56,50 @@ public sealed class WorldCell : Component
 
 	public void MarkReady()
 	{
-		ThreadSafe.AssertIsMainThread();
-
-		if ( State == CellState.Ready ) return;
-
 		State = CellState.Ready;
+	}
 
-		IsHidden = World.ShouldHideCell( Index );
-		World.DispatchCellReady( Index );
+	internal void Unload()
+	{
+		State = CellState.Unloaded;
+	}
+
+	protected override void OnUpdate()
+	{
+		IsMasked = State switch
+		{
+			CellState.Ready => World.AreParentCellsVisible( Index ),
+			CellState.Unloaded => World.IsChildCellVisible( Index ) || World.IsCellReady( Index ),
+			_ => false
+		};
+
+		var targetOpacity = IsMasked || State == CellState.Loading ? 0f : GetDistanceOpacity();
+
+		Opacity += Math.Sign( targetOpacity - Opacity ) * Time.Delta;
+
+		if ( State == CellState.Unloaded && Opacity <= 0f )
+		{
+			GameObject.Destroy();
+		}
+	}
+
+	private float GetDistanceOpacity()
+	{
+		if ( World.Child is null ) return 1f;
+		if ( (Scene.Camera?.Transform.World ?? World.EditorCameraTransform) is not { } camTransform ) return 1f;
+
+		var cellSize = World.CellSize;
+		var camPos = camTransform.Position;
+		var center = Transform.Position + new Vector3( cellSize, cellSize, World.CellHeight ) * 0.5f;
+
+		if ( World.Is2D )
+		{
+			camPos.z = 0f;
+			center.z = 0f;
+		}
+
+		var dist = (camPos - center).Length / cellSize;
+
+		return 1f - Math.Clamp( dist - World.LoadRadius + 1f, 0f, 1f );
 	}
 }

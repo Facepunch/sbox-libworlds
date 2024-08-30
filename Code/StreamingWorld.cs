@@ -13,7 +13,6 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 	private readonly HashSet<Vector3Int> _cellsToLoad = new();
 	private readonly HashSet<Vector3Int> _cellsToUnload = new();
 
-	private Transform? _editorCameraTransform;
 	private StreamingWorld? _parent;
 
 	[Property]
@@ -29,19 +28,19 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 
 			if ( _parent is not null )
 			{
-				_parent.CellReady -= Parent_CellReady;
-				_parent.CellUnloaded -= Parent_CellUnloaded;
+				_parent.Child = null;
 			}
 
 			_parent = value;
 
 			if ( _parent is not null )
 			{
-				_parent.CellReady += Parent_CellReady;
-				_parent.CellUnloaded += Parent_CellUnloaded;
+				_parent.Child = this;
 			}
 		}
 	}
+
+	internal StreamingWorld? Child { get; private set; }
 
 	public bool HasParent => Parent.IsValid();
 
@@ -62,8 +61,7 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 	/// </summary>
 	[Property] public int LoadRadius { get; set; } = 4;
 
-	internal event Action<Vector3Int>? CellReady;
-	internal event Action<Vector3Int>? CellUnloaded;
+	internal Transform? EditorCameraTransform { get; private set; }
 
 	private void UpdateDimensions()
 	{
@@ -72,15 +70,6 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 			Is2D = parent.Is2D;
 			CellHeight = parent.CellHeight;
 			CellSize = parent.CellSize * 2f;
-		}
-	}
-
-	protected override void OnDestroy()
-	{
-		if ( _parent is not null )
-		{
-			_parent.CellReady += Parent_CellReady;
-			_parent.CellUnloaded += Parent_CellUnloaded;
 		}
 	}
 
@@ -109,23 +98,25 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 
 		foreach ( var cellIndex in _cells.Keys )
 		{
-			if ( !_cellsToLoad.Remove( cellIndex ) )
+			if ( _cellsToLoad.Remove( cellIndex ) )
 			{
-				var inRange = false;
+				continue;
+			}
 
-				foreach ( var loadOrigin in _loadOrigins )
-				{
-					if ( (loadOrigin - cellIndex).LengthSquared <= unloadRadius * unloadRadius )
-					{
-						inRange = true;
-						break;
-					}
-				}
+			var inRange = false;
 
-				if ( !inRange )
+			foreach ( var loadOrigin in _loadOrigins )
+			{
+				if ( (loadOrigin - cellIndex).LengthSquared <= unloadRadius * unloadRadius )
 				{
-					_cellsToUnload.Add( cellIndex );
+					inRange = true;
+					break;
 				}
+			}
+
+			if ( !inRange )
+			{
+				_cellsToUnload.Add( cellIndex );
 			}
 		}
 
@@ -160,7 +151,7 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 			}
 		}
 
-		if ( Game.IsEditor && !Game.IsPlaying && _editorCameraTransform is { Position: var editorCamPos } )
+		if ( EditorCameraTransform is { Position: var editorCamPos } )
 		{
 			_loadOrigins.Add( GetCellIndex( editorCamPos ) );
 		}
@@ -191,16 +182,13 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		}
 	}
 
-	internal bool ShouldHideCell( Vector3Int cellIndex ) => AreParentCellsReady( cellIndex );
-
-	public CellState GetCellState( Vector3Int cellIndex )
+	public float GetCellOpacity( Vector3Int cellIndex )
 	{
-		return _cells.TryGetValue( cellIndex, out var cell ) && cell is { IsValid: true }
-			? cell.State
-			: CellState.Unloaded;
+		return _cells.TryGetValue( cellIndex, out var cell ) && cell is { IsValid: true, State: CellState.Ready }
+			? cell.IsMasked ? 1f : cell.Opacity : 0f;
 	}
 
-	private bool AreParentCellsReady( Vector3Int cellIndex )
+	internal bool AreParentCellsVisible( Vector3Int cellIndex )
 	{
 		if ( Parent is not { IsValid: true } parent )
 		{
@@ -213,12 +201,27 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		for ( var y = 0; y < 2; y++ )
 		for ( var x = 0; x < 2; x++ )
 		{
-			if ( parent.GetCellState( parentIndex + new Vector3Int( x, y, z ) ) == CellState.Ready ) continue;
+			if ( parent.GetCellOpacity( parentIndex + new Vector3Int( x, y, z ) ) >= 1f ) continue;
 
 			return false;
 		}
 
 		return true;
+	}
+
+	internal bool IsChildCellVisible( Vector3Int cellIndex )
+	{
+		if ( Child is not { IsValid: true } child )
+		{
+			return false;
+		}
+
+		return child.GetCellOpacity( ToChildCellIndex( cellIndex ) ) >= 1f;
+	}
+
+	public bool IsCellReady( Vector3Int cellIndex )
+	{
+		return _cells.TryGetValue( cellIndex, out var cell ) && cell.State == CellState.Ready;
 	}
 
 	private void LoadCell( Vector3Int cellIndex )
@@ -236,6 +239,7 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		var cell = go.Components.Create<WorldCell>();
 
 		cell.Index = cellIndex;
+		cell.Opacity = 0f;
 
 		_cells.Add( cellIndex, cell );
 
@@ -247,10 +251,6 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		{
 			cell.MarkReady();
 		}
-		else
-		{
-			cell.IsHidden = true;
-		}
 	}
 
 	private void UnloadCell( Vector3Int cellIndex )
@@ -258,14 +258,8 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		if ( !_cells.Remove( cellIndex, out var cell ) ) return;
 
 		Scene.GetAllComponents<ICellLoader>().FirstOrDefault()?.UnloadCell( cell );
-		CellUnloaded?.Invoke( cellIndex );
 
-		cell.GameObject.Destroy();
-	}
-
-	private static Vector3Int FromParentCellIndex( Vector3Int parentCellIndex )
-	{
-		return (parentCellIndex - 1) / 2;
+		cell.Unload();
 	}
 
 	private static Vector3Int ToParentCellIndex( Vector3Int cellIndex )
@@ -273,34 +267,14 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		return cellIndex * 2;
 	}
 
-	internal void DispatchCellReady( Vector3Int cellIndex )
+	private static Vector3Int ToChildCellIndex( Vector3Int cellIndex )
 	{
-		CellReady?.Invoke( cellIndex );
-	}
-
-	private void Parent_CellReady( Vector3Int parentCellIndex )
-	{
-		var cellIndex = FromParentCellIndex( parentCellIndex );
-
-		if ( !_cells.TryGetValue( cellIndex, out var cell ) ) return;
-		if ( cell.IsHidden || !ShouldHideCell( cellIndex ) ) return;
-
-		cell.IsHidden = true;
-	}
-
-	private void Parent_CellUnloaded( Vector3Int parentCellIndex )
-	{
-		var cellIndex = FromParentCellIndex( parentCellIndex );
-
-		if ( !_cells.TryGetValue( cellIndex, out var cell ) ) return;
-		if ( !cell.IsHidden || ShouldHideCell( cellIndex ) ) return;
-
-		cell.IsHidden = false;
+		return (cellIndex - 1) / 2;
 	}
 
 	protected override void DrawGizmos()
 	{
-		_editorCameraTransform = Gizmo.CameraTransform;
+		EditorCameraTransform = Gizmo.CameraTransform;
 
 		if ( !Gizmo.IsSelected ) return;
 
@@ -314,7 +288,7 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 			var margin = CellSize / 64f;
 			var bbox = new BBox( margin, new Vector3( CellSize, CellSize, Is2D ? margin * 2f : cell.World.CellSize ) - margin );
 
-			if ( AreParentCellsReady( index ) )
+			if ( AreParentCellsVisible( index ) )
 			{
 				Gizmo.Draw.SolidBox( bbox );
 			}
