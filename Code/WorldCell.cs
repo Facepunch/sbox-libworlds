@@ -36,7 +36,8 @@ public sealed class WorldCell : Component, Component.ExecuteInEditor
 		}
 	}
 
-	internal bool IsMasked { get; private set; }
+	internal bool IsMaskedByParent { get; private set; }
+	internal bool IsMaskedByChild { get; private set; }
 
 	public event WorldCellOpacityChanged? OpacityChanged;
 
@@ -66,14 +67,10 @@ public sealed class WorldCell : Component, Component.ExecuteInEditor
 
 	protected override void OnUpdate()
 	{
-		IsMasked = State switch
-		{
-			CellState.Ready => World.AreParentCellsVisible( Index ),
-			CellState.Unloaded => World.IsChildCellVisible( Index ) || World.IsCellReady( Index ),
-			_ => false
-		};
+		IsMaskedByParent = World.AreParentCellsVisible( Index );
+		IsMaskedByChild = World.IsChildCellVisible( Index );
 
-		var targetOpacity = IsMasked || State == CellState.Loading ? 0f : GetDistanceOpacity();
+		var targetOpacity = IsMaskedByParent || IsMaskedByChild || State == CellState.Loading ? 0f : GetDistanceOpacity();
 
 		Opacity += Math.Sign( targetOpacity - Opacity ) * Time.Delta;
 
@@ -85,6 +82,8 @@ public sealed class WorldCell : Component, Component.ExecuteInEditor
 
 	private float GetDistanceOpacity()
 	{
+		return 1f;
+
 		if ( World.Child is null ) return 1f;
 		if ( (Scene.Camera?.Transform.World ?? World.EditorCameraTransform) is not { } camTransform ) return 1f;
 

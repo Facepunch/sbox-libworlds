@@ -185,7 +185,7 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 	public float GetCellOpacity( Vector3Int cellIndex )
 	{
 		return _cells.TryGetValue( cellIndex, out var cell ) && cell is { IsValid: true, State: CellState.Ready }
-			? cell.IsMasked ? 1f : cell.Opacity : 0f;
+			? cell.Opacity : 0f;
 	}
 
 	internal bool AreParentCellsVisible( Vector3Int cellIndex )
@@ -201,7 +201,10 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		for ( var y = 0; y < 2; y++ )
 		for ( var x = 0; x < 2; x++ )
 		{
-			if ( parent.GetCellOpacity( parentIndex + new Vector3Int( x, y, z ) ) >= 1f ) continue;
+			var parentCellIndex = parentIndex + new Vector3Int( x, y, z );
+
+			if ( parent.GetCellOpacity( parentCellIndex ) >= 1f ) continue;
+			if ( parent._cells.TryGetValue( parentCellIndex, out var cell ) && cell.IsMaskedByParent ) continue;
 
 			return false;
 		}
@@ -216,7 +219,9 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 			return false;
 		}
 
-		return child.GetCellOpacity( ToChildCellIndex( cellIndex ) ) >= 1f;
+		var childIndex = ToChildCellIndex( cellIndex );
+
+		return child.GetCellOpacity( childIndex ) >= 1f || child.IsChildCellVisible( childIndex );
 	}
 
 	public bool IsCellReady( Vector3Int cellIndex )
