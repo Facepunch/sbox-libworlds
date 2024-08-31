@@ -48,14 +48,18 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 	[Property, JsonIgnore, ShowIf( nameof(HasParent), true )]
 	public int Level => Parent is { IsValid: true } parent ? parent.Level + 1 : 0;
 
+	public int LevelCount => Child is { IsValid: true } child ? child.LevelCount + 1 : 1;
+
 	[Property, HideIf( nameof(HasParent), true )]
 	public bool Is2D { get; set; }
 
 	[Property, HideIf( nameof(HasParent), true )]
 	public float CellSize { get; set; } = 1024f;
 
-	[Property, HideIf( nameof(Is2D), true ), HideIf( nameof(HasParent), true )]
+	[Property, ShowIf( nameof( ShowCellHeight ), true )]
 	public float CellHeight { get; set; } = 1024f;
+
+	private bool ShowCellHeight => !Is2D && !HasParent;
 
 	/// <summary>
 	/// How many cells away from a <see cref="LoadOrigin"/> should be loaded.
@@ -177,7 +181,7 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 			return true;
 		}
 
-		return cell is { IsOutOfRange: false, Opacity: >= 1f };
+		return cell.Opacity >= 1f || cell.IsOutOfRange;
 	}
 
 	private void LoadCell( Vector3Int cellIndex )
@@ -242,13 +246,15 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 
 		Gizmo.Draw.IgnoreDepth = true;
 
+		var levelCount = LevelCount;
+		var margin = (levelCount - Level) * CellSize / (16 << Level);
+
 		foreach ( var cell in _cells.Values )
 		{
 			Gizmo.Transform = cell.Transform.World;
 			Gizmo.Draw.Color = new ColorHsv( Level * 30f, 1f, 1f, cell.Opacity * 0.25f );
 
-			var margin = CellSize / 64f;
-			var bbox = new BBox( margin, new Vector3( CellSize, CellSize, Is2D ? margin * 2f : cell.World.CellSize ) - margin );
+			var bbox = new BBox( new Vector3( 0f, 0f, margin ), new Vector3( CellSize, CellSize, Is2D ? margin : cell.World.CellSize ) );
 
 			Gizmo.Draw.LineBBox( bbox );
 
