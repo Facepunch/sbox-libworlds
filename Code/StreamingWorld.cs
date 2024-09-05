@@ -78,6 +78,17 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		}
 	}
 
+	public void Clear()
+	{
+		foreach ( var cell in _cells.ToArray() )
+		{
+			cell.Value.GameObject.Destroy();
+		}
+
+		_cells.Clear();
+		Child?.Clear();
+	}
+
 	protected override void OnValidate()
 	{
 		UpdateDimensions();
