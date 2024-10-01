@@ -17,7 +17,10 @@ public sealed class WorldCell : Component, Component.ExecuteInEditor
 	private float _opacity = 0f;
 
 	[Property]
-	public Vector3Int Index { get; set; }
+	public CellIndex Index { get; set; }
+
+	[Property]
+	public Vector3 Size { get; set; }
 
 	public CellState State { get; private set; }
 
@@ -36,8 +39,8 @@ public sealed class WorldCell : Component, Component.ExecuteInEditor
 		}
 	}
 
-	internal bool IsParentOutOfRange { get; set; }
-	internal bool IsMaskedByParent { get; set; }
+	internal bool IsChildOutOfRange { get; set; }
+	internal bool IsMaskedByChild { get; set; }
 	internal bool IsOutOfRange { get; set; }
 
 	public event WorldCellOpacityChanged? OpacityChanged;
@@ -79,12 +82,12 @@ public sealed class WorldCell : Component, Component.ExecuteInEditor
 			return 0f;
 		}
 
-		if ( IsParentOutOfRange )
+		if ( IsChildOutOfRange )
 		{
 			return 1f;
 		}
 
-		if ( IsOutOfRange && World.CanFadeOutCell( Index ) || IsMaskedByParent )
+		if ( IsOutOfRange && World.CanFadeOutCell( Index ) || IsMaskedByChild )
 		{
 			return 0f;
 		}
@@ -95,22 +98,5 @@ public sealed class WorldCell : Component, Component.ExecuteInEditor
 	private float GetDistanceOpacity()
 	{
 		return 1f;
-
-		if ( World.Child is null ) return 1f;
-		if ( (Scene.Camera?.Transform.World ?? World.EditorCameraTransform) is not { } camTransform ) return 1f;
-
-		var cellSize = World.CellSize;
-		var camPos = camTransform.Position;
-		var center = Transform.Position + new Vector3( cellSize, cellSize, World.CellHeight ) * 0.5f;
-
-		if ( World.Is2D )
-		{
-			camPos.z = 0f;
-			center.z = 0f;
-		}
-
-		var dist = (camPos - center).Length / cellSize;
-
-		return 1f - Math.Clamp( dist - World.LoadRadius + 1f, 0f, 1f );
 	}
 }

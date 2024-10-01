@@ -1,103 +1,126 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
-using System.Runtime.InteropServices;
 using System.Text.Json.Serialization;
 
 namespace Sandbox.Worlds;
 
+public record struct CellIndex( Vector3Int Position, int Level )
+{
+	[JsonIgnore]
+	public CellIndex Parent => new (
+		new Vector3Int( Position.x < 0 ? Position.x - 1 : Position.x,
+			Position.y < 0 ? Position.y - 1 : Position.y,
+			Position.z < 0 ? Position.z - 1 : Position.z ) / 2,
+		Level + 1 );
+
+	[JsonIgnore]
+	public CellIndex Child => new( Position * 2, Level - 1 );
+
+	public override string ToString()
+	{
+		return $"{{ Level = {Level}, Position = {Position} }}";
+	}
+}
+
 public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 {
-	private readonly Dictionary<Vector3Int, WorldCell> _cells = new();
+	private record struct Level( int Index, Dictionary<Vector3Int, WorldCell> Cells, HashSet<Vector3Int> LoadOrigins );
 
-	private readonly HashSet<Vector3Int> _loadOrigins = new();
-	private readonly HashSet<Vector3Int> _cellsToLoad = new();
-	private readonly HashSet<Vector3Int> _cellsToUnload = new();
+	private readonly List<Level> _levels = new();
 
-	private StreamingWorld? _parent;
+	private readonly HashSet<CellIndex> _cellsToLoad = new();
+	private readonly HashSet<CellIndex> _cellsToUnload = new();
+
+	private int _levelCount = 1;
+	private bool _is2d = true;
+	private int _loadRadius = 4;
 
 	[Property]
-	public StreamingWorld? Parent
+	public int DetailLevels
 	{
-		get => _parent;
+		get
+		{
+			return _levelCount;
+		}
+
 		set
 		{
-			if ( value?.Hierarchy.Contains( this ) is true )
-			{
-				throw new ArgumentException( "World hierarchy must have a root." );
-			}
+			value = Math.Max( 1, value );
 
-			if ( _parent is not null )
-			{
-				_parent.Child = null;
-			}
+			if ( value == _levelCount ) return;
 
-			_parent = value;
-
-			if ( _parent is not null )
-			{
-				_parent.Child = this;
-			}
+			_levelCount = value;
+			UpdateLevelCount();
 		}
 	}
 
-	internal StreamingWorld? Child { get; private set; }
+	[Property]
+	public bool Is2D
+	{
+		get => _is2d;
+		set
+		{
+			if ( _is2d == value ) return;
 
-	public bool HasParent => Parent.IsValid();
+			_is2d = value;
+			UpdateLoadRadius();
+		}
+	}
 
-	[Property, JsonIgnore, ShowIf( nameof(HasParent), true )]
-	public int Level => Parent is { IsValid: true } parent ? parent.Level + 1 : 0;
-
-	public int LevelCount => Child is { IsValid: true } child ? child.LevelCount + 1 : 1;
-
-	[Property, HideIf( nameof(HasParent), true )]
-	public bool Is2D { get; set; }
-
-	[Property, HideIf( nameof(HasParent), true )]
-	public float CellSize { get; set; } = 1024f;
-
-	[Property, ShowIf( nameof( ShowCellHeight ), true )]
-	public float CellHeight { get; set; } = 1024f;
-
-	private bool ShowCellHeight => !Is2D && !HasParent;
+	[Property] public float BaseCellSize { get; set; } = 1024f;
 
 	/// <summary>
-	/// How many cells away from a <see cref="LoadOrigin"/> should be loaded.
+	/// How many cells away from a <see cref="LoadOrigin"/> should be loaded, in each detail level.
 	/// </summary>
-	[Property] public int LoadRadius { get; set; } = 4;
+	[Property, Range( 1, 16, 1 )]
+	public int LoadRadius
+	{
+		get => _loadRadius;
+		set
+		{
+			value = Math.Clamp( value, 1, 16 );
+
+			if ( _loadRadius == value ) return;
+
+			_loadRadius = value;
+			UpdateLoadRadius();
+		}
+	}
 
 	internal Transform? EditorCameraTransform { get; private set; }
 
-	private void UpdateDimensions()
+	public StreamingWorld()
 	{
-		if ( Parent is { IsValid: true } parent )
-		{
-			Is2D = parent.Is2D;
-			CellHeight = parent.CellHeight;
-			CellSize = parent.CellSize * 2f;
-		}
+		UpdateLoadRadius();
+		UpdateLevelCount();
 	}
 
 	public void Clear()
 	{
-		foreach ( var cell in _cells.ToArray() )
+		foreach ( var level in _levels )
 		{
-			cell.Value.GameObject.Destroy();
-		}
+			foreach ( var cell in level.Cells.Values.ToArray() )
+			{
+				cell.DestroyGameObject();
+			}
 
-		_cells.Clear();
-		Child?.Clear();
+			level.Cells.Clear();
+		}
 	}
 
-	protected override void OnValidate()
+	public bool TryGetCell( CellIndex index, [NotNullWhen( true )] out WorldCell? cell )
 	{
-		UpdateDimensions();
+		cell = null;
+
+		if ( index.Level < 0 || index.Level >= DetailLevels ) return false;
+
+		return _levels[index.Level].Cells.TryGetValue( index.Position, out cell );
 	}
 
 	protected override void OnUpdate()
 	{
-		if ( HasParent ) return;
-
 		UpdateCells();
 	}
 
@@ -107,38 +130,87 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		{
 			foreach ( var origin in Scene.GetAllComponents<LoadOrigin>() )
 			{
-				if ( origin.MaxLevel is { } maxLevel && Level > maxLevel )
+				if ( origin.MaxLevel is { } maxLevel )
 				{
-					continue;
+					AddLoadOrigin( origin.Transform.Position, maxLevel );
 				}
-
-				_loadOrigins.Add( GetCellIndex( origin.Transform.Position ) );
+				else
+				{
+					AddLoadOrigin( origin.Transform.Position );
+				}
 			}
 
 			foreach ( var camera in Scene.GetAllComponents<CameraComponent>() )
 			{
-				_loadOrigins.Add( GetCellIndex( camera.Transform.Position ) );
+				AddLoadOrigin( camera.Transform.Position );
 			}
 		}
 
 		if ( EditorCameraTransform is { Position: var editorCamPos } )
 		{
-			_loadOrigins.Add( GetCellIndex( editorCamPos ) );
+			AddLoadOrigin( editorCamPos );
 		}
 	}
 
-	public Vector3Int GetCellIndex( Vector3 worldPosition )
+	private void AddLoadOrigin( Vector3 position )
 	{
-		var localPos = Transform.World.PointToLocal( worldPosition );
-		return new Vector3Int(
-			(int)MathF.Floor( localPos.x / CellSize ),
-			(int)MathF.Floor( localPos.y / CellSize ),
-			Is2D ? 0 : ( int)MathF.Floor( localPos.z / CellHeight ) );
+		AddLoadOrigin( position, DetailLevels );
 	}
 
-	private void LoadCellsAround( Vector3Int cellIndex )
+	private void AddLoadOrigin( Vector3 position, int maxLevel )
 	{
-		if ( !Is2D ) throw new NotImplementedException();
+		for ( var i = 0; i < maxLevel && i < DetailLevels; ++i )
+		{
+			_levels[i].LoadOrigins.Add( GetCellIndex( position, i ).Position );
+		}
+	}
+
+	public Vector3 GetCellSize( int level )
+	{
+		var size = BaseCellSize * (1 << level);
+
+		return Is2D ? new Vector3( size, size, 0f ) : size;
+	}
+
+	private CellIndex GetCellIndex( Vector3 worldPosition, int level )
+	{
+		var cellSize = GetCellSize( level );
+		var localPos = Transform.World.PointToLocal( worldPosition );
+
+		return new CellIndex(
+			new Vector3Int(
+				(int)MathF.Floor( localPos.x / cellSize.x ),
+				(int)MathF.Floor( localPos.y / cellSize.y ),
+				Is2D ? 0 : (int)MathF.Floor( localPos.z / cellSize.z ) ),
+			level );
+	}
+
+	private Vector3Int[] _loadKernel;
+
+	private void UpdateLevelCount()
+	{
+		while ( _levels.Count > _levelCount )
+		{
+			var topLevel = _levels[^1];
+			_levels.RemoveAt( _levels.Count - 1 );
+
+			foreach ( var cell in topLevel.Cells.Values.ToArray() )
+			{
+				cell.DestroyGameObject();
+			}
+
+			topLevel.Cells.Clear();
+		}
+
+		while ( _levels.Count < _levelCount )
+		{
+			_levels.Add( new Level( _levels.Count, new Dictionary<Vector3Int, WorldCell>(), new HashSet<Vector3Int>() ) );
+		}
+	}
+
+	private void UpdateLoadRadius()
+	{
+		var list = new List<Vector3Int>();
 
 		for ( var dx = -LoadRadius; dx <= LoadRadius; ++dx )
 		{
@@ -147,19 +219,41 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 
 			for ( var dy = minDy; dy <= maxDy; ++dy )
 			{
-				_cellsToLoad.Add( new Vector3Int( cellIndex.x + dx, cellIndex.y + dy, 0 ) );
+				if ( Is2D )
+				{
+					list.Add( new Vector3Int( dx, dy, 0 ) );
+					continue;
+				}
+
+				var maxDz = (int)MathF.Sqrt( LoadRadius * LoadRadius - dx * dx - dy * dy );
+				var minDz = -maxDz;
+
+				for ( var dz = minDz; dz <= maxDz; ++dz )
+				{
+					list.Add( new Vector3Int( dx, dy, dz ) );
+				}
 			}
+		}
+
+		_loadKernel = list.OrderBy( x => x.LengthSquared ).ToArray();
+	}
+
+	private void LoadCellsAround( CellIndex index )
+	{
+		foreach ( var delta in _loadKernel )
+		{
+			_cellsToLoad.Add( index with { Position = index.Position + delta } );
 		}
 	}
 
-	internal (bool AllVisible, bool AnyOutOfRange) GetParentState( Vector3Int cellIndex )
+	internal (bool AllVisible, bool AnyOutOfRange) GetChildState( CellIndex cellIndex )
 	{
-		if ( Parent is not { IsValid: true } parent )
+		if ( cellIndex.Level <= 0 )
 		{
 			return (false, false);
 		}
 
-		var parentIndex = ToParentCellIndex( cellIndex );
+		var baseChildIndex = cellIndex.Child;
 		var allVisible = true;
 		var anyOutOfRange = false;
 
@@ -167,41 +261,43 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		for ( var y = 0; y < 2; y++ )
 		for ( var x = 0; x < 2; x++ )
 		{
-			var parentCellIndex = parentIndex + new Vector3Int( x, y, z );
+			var childIndex = baseChildIndex with { Position = baseChildIndex.Position + new Vector3Int( x, y, z ) };
 
-			if ( !parent._cells.TryGetValue( parentCellIndex, out var cell ) )
+			if ( !TryGetCell( childIndex, out var cell ) )
 			{
 				allVisible = false;
 				break;
 			}
 
 			anyOutOfRange |= cell.IsOutOfRange;
-			allVisible &= cell.Opacity >= 1f || cell is { IsMaskedByParent: true };
+			allVisible &= cell.Opacity >= 1f || cell is { IsMaskedByChild: true };
 		}
 
 		return (allVisible, anyOutOfRange);
 	}
 
-	internal bool CanFadeOutCell( Vector3Int cellIndex )
+	internal bool CanFadeOutCell( CellIndex cellIndex )
 	{
-		var childIndex = ToChildCellIndex( cellIndex );
-
-		if ( !Child.IsValid() || !Child._cells.TryGetValue( childIndex, out var cell ) )
+		if ( !TryGetCell( cellIndex.Parent, out var parent ) )
 		{
-			// Child doesn't exist! No hope of it fading in.
+			// Parent doesn't exist! No hope of it fading in.
 			return true;
 		}
 
-		return cell.Opacity >= 1f || cell.IsOutOfRange;
+		return parent.Opacity >= 1f || parent.IsOutOfRange;
 	}
 
-	private void LoadCell( Vector3Int cellIndex )
+	private void LoadCell( CellIndex cellIndex )
 	{
+		if ( cellIndex.Level < 0 || cellIndex.Level >= DetailLevels ) return;
+
+		var size = GetCellSize( cellIndex.Level );
+
 		var go = new GameObject( false, Is2D
-			? $"Cell {cellIndex.x} {cellIndex.y}"
-			: $"Cell {cellIndex.x} {cellIndex.y} {cellIndex.z}" )
+			? $"Cell {cellIndex.Level} - {cellIndex.Position.x} {cellIndex.Position.y}"
+			: $"Cell {cellIndex.Level} - {cellIndex.Position.x} {cellIndex.Position.y} {cellIndex.Position.z}" )
 		{
-			Transform = { Position = new Vector3( cellIndex.x * CellSize, cellIndex.y * CellSize, cellIndex.z * CellHeight ) },
+			Transform = { Position = cellIndex.Position * size },
 			Parent = GameObject,
 			Flags = GameObjectFlags.NotSaved | GameObjectFlags.Hidden,
 			NetworkMode = NetworkMode.Never
@@ -210,9 +306,10 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		var cell = go.Components.Create<WorldCell>();
 
 		cell.Index = cellIndex;
+		cell.Size = size;
 		cell.Opacity = 0f;
 
-		_cells.Add( cellIndex, cell );
+		_levels[cellIndex.Level].Cells.Add( cellIndex.Position, cell );
 
 		go.Enabled = true;
 
@@ -224,29 +321,16 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		}
 	}
 
-	private void UnloadCell( Vector3Int cellIndex )
+	private void UnloadCell( CellIndex cellIndex )
 	{
-		if ( !_cells.Remove( cellIndex, out var cell ) ) return;
+		if ( cellIndex.Level < 0 || cellIndex.Level >= DetailLevels ) return;
+		if ( !_levels[cellIndex.Level].Cells.Remove( cellIndex.Position, out var cell ) ) return;
 
 		Scene.GetAllComponents<ICellLoader>().FirstOrDefault()?.UnloadCell( cell );
 
 		cell.Unload();
 
 		cell.GameObject.Destroy();
-	}
-
-	private static Vector3Int ToParentCellIndex( Vector3Int cellIndex )
-	{
-		return cellIndex * 2;
-	}
-
-	private static Vector3Int ToChildCellIndex( Vector3Int cellIndex )
-	{
-		if ( cellIndex.x < 0 ) cellIndex.x -= 1;
-		if ( cellIndex.y < 0 ) cellIndex.y -= 1;
-		if ( cellIndex.z < 0 ) cellIndex.z -= 1;
-
-		return cellIndex / 2;
 	}
 
 	protected override void DrawGizmos()
@@ -257,84 +341,81 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 
 		Gizmo.Draw.IgnoreDepth = true;
 
-		var levelCount = LevelCount;
-		var margin = (levelCount - Level) * CellSize / (16 << Level);
+		var levelCount = DetailLevels;
 
-		foreach ( var cell in _cells.Values )
+		foreach ( var level in _levels )
 		{
-			Gizmo.Transform = cell.Transform.World;
-			Gizmo.Draw.Color = new ColorHsv( Level * 30f, 1f, 1f, cell.Opacity * 0.25f );
+			var cellSize = GetCellSize( level.Index );
+			var margin = (levelCount - level.Index) * cellSize.x / (16 << level.Index);
+			var color = new ColorHsv( level.Index * 30f, 1f, 1f );
 
-			var bbox = new BBox( new Vector3( 0f, 0f, margin ), new Vector3( CellSize, CellSize, Is2D ? margin : cell.World.CellSize ) );
-
-			Gizmo.Draw.LineBBox( bbox );
-
-			if ( cell.State == CellState.Loading )
+			foreach ( var cell in level.Cells.Values )
 			{
-				foreach ( var corner in bbox.Corners )
+				Gizmo.Transform = cell.Transform.World;
+				Gizmo.Draw.Color = color.WithAlpha( cell.Opacity * 0.25f );
+
+				var bbox = new BBox(
+					new Vector3( 0f, 0f, margin ),
+					new Vector3( cellSize.x, cellSize.y, Is2D ? margin : cellSize.z ) );
+
+				Gizmo.Draw.LineBBox( bbox );
+
+				if ( cell.State == CellState.Loading || cell.IsMaskedByChild || cell.IsOutOfRange )
 				{
-					Gizmo.Draw.Line( corner, bbox.Center );
+					foreach ( var corner in bbox.Corners )
+					{
+						Gizmo.Draw.Line( corner, bbox.Center );
+					}
 				}
-			}
-		}
-	}
-
-	private IEnumerable<StreamingWorld> Hierarchy
-	{
-		get
-		{
-			yield return this;
-
-			if ( Parent is null ) yield break;
-
-			foreach ( var parent in Parent.Hierarchy )
-			{
-				yield return parent;
 			}
 		}
 	}
 
 	private void UpdateCells()
 	{
-		UpdateDimensions();
-
-		_loadOrigins.Clear();
+		foreach ( var level in _levels )
+		{
+			level.LoadOrigins.Clear();
+		}
 
 		_cellsToLoad.Clear();
 		_cellsToUnload.Clear();
 
 		FindLoadOrigins();
 
-		foreach ( var loadOrigin in _loadOrigins )
-		{
-			LoadCellsAround( loadOrigin );
-		}
-
 		var unloadRadius = LoadRadius + 1;
 
-		foreach ( var cell in _cells.Values )
+		foreach ( var level in _levels )
 		{
-			if ( _cellsToLoad.Remove( cell.Index ) )
+			foreach ( var loadOrigin in level.LoadOrigins )
 			{
-				continue;
+				LoadCellsAround( new CellIndex( loadOrigin, level.Index ) );
 			}
 
-			var inRange = false;
-
-			foreach ( var loadOrigin in _loadOrigins )
+			foreach ( var cell in level.Cells.Values )
 			{
-				if ( (loadOrigin - cell.Index).LengthSquared <= unloadRadius * unloadRadius )
+				if ( _cellsToLoad.Remove( cell.Index ) )
 				{
-					inRange = true;
-					break;
+					continue;
 				}
-			}
 
-			cell.IsOutOfRange = !inRange;
+				var inRange = false;
 
-			if ( !inRange && cell.Opacity <= 0f )
-			{
-				_cellsToUnload.Add( cell.Index );
+				foreach ( var loadOrigin in level.LoadOrigins )
+				{
+					if ( (loadOrigin - cell.Index.Position).LengthSquared <= unloadRadius * unloadRadius )
+					{
+						inRange = true;
+						break;
+					}
+				}
+
+				cell.IsOutOfRange = !inRange;
+
+				if ( !inRange && cell.Opacity <= 0f )
+				{
+					_cellsToUnload.Add( cell.Index );
+				}
 			}
 		}
 
@@ -348,15 +429,14 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 			LoadCell( cellIndex );
 		}
 
-		foreach ( var cell in _cells.Values )
+		foreach ( var level in _levels )
 		{
-			cell.UpdateOpacity();
-			(cell.IsMaskedByParent, cell.IsParentOutOfRange) = GetParentState( cell.Index );
-		}
+			foreach ( var cell in level.Cells.Values )
+			{
+				cell.UpdateOpacity();
 
-		if ( Child is { } child )
-		{
-			child.UpdateCells();
+				(cell.IsMaskedByChild, cell.IsChildOutOfRange) = GetChildState( cell.Index );
+			}
 		}
 	}
 }
