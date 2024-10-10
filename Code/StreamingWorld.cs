@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Text.Json.Serialization;
+using Sandbox.Diagnostics;
 
 namespace Sandbox.Worlds;
 
@@ -41,7 +42,8 @@ public record struct CellIndex( int Level, Vector3Int Position )
 }
 
 /// <summary>
-/// 
+/// A world made out of a 2D or 3D grid of cells, optionally with several levels of detail. Cells are loaded on demand,
+/// deferring to one or more <see cref="ICellLoader"/> components to handle loading / unloading.
 /// </summary>
 [Icon( "public" )]
 public sealed class StreamingWorld : Component, Component.ExecuteInEditor
@@ -57,6 +59,10 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 	private bool _is2d = true;
 	private int _loadRadius = 4;
 
+	/// <summary>
+	/// How many levels of detail does this world use. Minimum is 1. Each level is half
+	/// the resolution of the previous one, and loads in at twice the distance.
+	/// </summary>
 	[Property]
 	public int DetailLevels
 	{
@@ -76,6 +82,9 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		}
 	}
 
+	/// <summary>
+	/// If true, use a 2D grid of cells instead of 3D.
+	/// </summary>
 	[Property]
 	public bool Is2D
 	{
@@ -89,10 +98,13 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		}
 	}
 
+	/// <summary>
+	/// Size of one cell in each axis at the highest level of detail.
+	/// </summary>
 	[Property] public float BaseCellSize { get; set; } = 1024f;
 
 	/// <summary>
-	/// How many cells away from a <see cref="LoadOrigin"/> should be loaded, in each detail level.
+	/// How many cells away from a <see cref="LoadOrigin"/> or active camera should be loaded, in each detail level.
 	/// </summary>
 	[Property, Range( 1, 16, 1 )]
 	public int LoadRadius
@@ -117,16 +129,19 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		UpdateLevelCount();
 	}
 
+	/// <summary>
+	/// Immediately remove all cells in the world.
+	/// </summary>
 	public void Clear()
 	{
 		foreach ( var level in _levels )
 		{
 			foreach ( var cell in level.Cells.Values.ToArray() )
 			{
-				cell.DestroyGameObject();
+				UnloadCell( cell.Index );
 			}
 
-			level.Cells.Clear();
+			Assert.AreEqual( 0, level.Cells.Count );
 		}
 	}
 
@@ -211,14 +226,15 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		while ( _levels.Count > _levelCount )
 		{
 			var topLevel = _levels[^1];
-			_levels.RemoveAt( _levels.Count - 1 );
 
 			foreach ( var cell in topLevel.Cells.Values.ToArray() )
 			{
-				cell.DestroyGameObject();
+				UnloadCell( cell.Index );
 			}
 
-			topLevel.Cells.Clear();
+			Assert.AreEqual( 0, topLevel.Cells.Count );
+
+			_levels.RemoveAt( _levels.Count - 1 );
 		}
 
 		while ( _levels.Count < _levelCount )
@@ -352,7 +368,7 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 
 	private void UnloadCell( CellIndex cellIndex )
 	{
-		if ( cellIndex.Level < 0 || cellIndex.Level >= DetailLevels ) return;
+		if ( cellIndex.Level < 0 || cellIndex.Level >= _levels.Count ) return;
 		if ( !_levels[cellIndex.Level].Cells.Remove( cellIndex.Position, out var cell ) ) return;
 
 		foreach ( var cellLoader in Scene.GetAllComponents<ICellLoader>().Reverse() )
@@ -369,6 +385,11 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 
 		cell.Unload();
 		cell.GameObject.Destroy();
+	}
+
+	protected override void OnDestroy()
+	{
+		Clear();
 	}
 
 	protected override void DrawGizmos()
