@@ -6,17 +6,33 @@ using System.Text.Json.Serialization;
 
 namespace Sandbox.Worlds;
 
-public record struct CellIndex( Vector3Int Position, int Level )
+/// <summary>
+/// Identifies a cell in a <see cref="StreamingWorld"/>.
+/// </summary>
+/// <param name="Position">
+/// Position index of the cell in its detail level.
+/// Neighbouring cells will differ by <c>±1</c> in one axis.
+/// For 2D worlds, the <c>z</c> component will always be <c>0</c>.
+/// </param>
+/// <param name="Level">Detail level of the cell. Level <c>0</c> is the highest.</param>
+public record struct CellIndex( int Level, Vector3Int Position )
 {
+	/// <summary>
+	/// The index of the cell, one level of detail lower than this one, that contains this cell.
+	/// </summary>
 	[JsonIgnore]
-	public CellIndex Parent => new (
-		new Vector3Int( Position.x < 0 ? Position.x - 1 : Position.x,
+	public CellIndex Parent => new( Level + 1,
+		new Vector3Int(
+			Position.x < 0 ? Position.x - 1 : Position.x,
 			Position.y < 0 ? Position.y - 1 : Position.y,
-			Position.z < 0 ? Position.z - 1 : Position.z ) / 2,
-		Level + 1 );
+			Position.z < 0 ? Position.z - 1 : Position.z ) / 2 );
 
+	/// <summary>
+	/// The index of the cell, one level of detail higher than this one, with the minimum position still contained by this cell.
+	/// In 2D worlds there will be 4 child cells per lower-detail cell, and in 3D there will be 8.
+	/// </summary>
 	[JsonIgnore]
-	public CellIndex Child => new( Position * 2, Level - 1 );
+	public CellIndex FirstChild => new( Level - 1, Position * 2 );
 
 	public override string ToString()
 	{
@@ -24,6 +40,10 @@ public record struct CellIndex( Vector3Int Position, int Level )
 	}
 }
 
+/// <summary>
+/// 
+/// </summary>
+[Icon( "public" )]
 public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 {
 	private record struct Level( int Index, Dictionary<Vector3Int, WorldCell> Cells, HashSet<Vector3Int> LoadOrigins );
@@ -177,12 +197,11 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		var cellSize = GetCellSize( level );
 		var localPos = Transform.World.PointToLocal( worldPosition );
 
-		return new CellIndex(
+		return new CellIndex( level,
 			new Vector3Int(
 				(int)MathF.Floor( localPos.x / cellSize.x ),
 				(int)MathF.Floor( localPos.y / cellSize.y ),
-				Is2D ? 0 : (int)MathF.Floor( localPos.z / cellSize.z ) ),
-			level );
+				Is2D ? 0 : (int)MathF.Floor( localPos.z / cellSize.z ) ) );
 	}
 
 	private Vector3Int[] _loadKernel = null!;
@@ -253,7 +272,7 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 			return (false, false);
 		}
 
-		var baseChildIndex = cellIndex.Child;
+		var baseChildIndex = cellIndex.FirstChild;
 		var allVisible = true;
 		var anyOutOfRange = false;
 
@@ -408,7 +427,7 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		{
 			foreach ( var loadOrigin in level.LoadOrigins )
 			{
-				LoadCellsAround( new CellIndex( loadOrigin, level.Index ) );
+				LoadCellsAround( new CellIndex( level.Index, loadOrigin ) );
 			}
 
 			foreach ( var cell in level.Cells.Values )

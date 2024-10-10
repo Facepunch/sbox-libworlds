@@ -12,14 +12,15 @@ public enum CellState
 
 public delegate void WorldCellOpacityChanged( WorldCell cell, float opacity );
 
+[Hide]
 public sealed class WorldCell : Component, Component.ExecuteInEditor
 {
 	private float _opacity = 0f;
 
-	[Property]
 	public CellIndex Index { get; set; }
 
-	[Property]
+	public int Level => Index.Level;
+
 	public Vector3 Size { get; set; }
 
 	public CellState State { get; private set; }
