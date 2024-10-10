@@ -313,7 +313,17 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 
 		go.Enabled = true;
 
-		Scene.GetAllComponents<ICellLoader>().FirstOrDefault()?.LoadCell( cell );
+		foreach ( var cellLoader in Scene.GetAllComponents<ICellLoader>() )
+		{
+			try
+			{
+				cellLoader.LoadCell( cell );
+			}
+			catch ( Exception ex )
+			{
+				Log.Error( ex );
+			}
+		}
 
 		if ( cell.State != CellState.Loading )
 		{
@@ -326,10 +336,19 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		if ( cellIndex.Level < 0 || cellIndex.Level >= DetailLevels ) return;
 		if ( !_levels[cellIndex.Level].Cells.Remove( cellIndex.Position, out var cell ) ) return;
 
-		Scene.GetAllComponents<ICellLoader>().FirstOrDefault()?.UnloadCell( cell );
+		foreach ( var cellLoader in Scene.GetAllComponents<ICellLoader>().Reverse() )
+		{
+			try
+			{
+				cellLoader.UnloadCell( cell );
+			}
+			catch ( Exception ex )
+			{
+				Log.Error( ex );
+			}
+		}
 
 		cell.Unload();
-
 		cell.GameObject.Destroy();
 	}
 
