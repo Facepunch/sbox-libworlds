@@ -130,7 +130,7 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 	}
 
 	/// <summary>
-	/// Immediately remove all cells in the world.
+	/// Immediately unloads all cells in this world.
 	/// </summary>
 	public void Clear()
 	{
@@ -145,6 +145,13 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		}
 	}
 
+	/// <summary>
+	/// Attempts to get a cell given an index. Returns false if the cell isn't in memory.
+	/// Check <see cref="WorldCell.State"/> to see if the cell is <see cref="CellState.Loading"/>
+	/// or <see cref="CellState.Ready"/>.
+	/// </summary>
+	/// <param name="index">Cell index.</param>
+	/// <param name="cell">If true was returned, the requested cell.</param>
 	public bool TryGetCell( CellIndex index, [NotNullWhen( true )] out WorldCell? cell )
 	{
 		cell = null;
@@ -200,6 +207,10 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		}
 	}
 
+	/// <summary>
+	/// Gets the size of cells at a given level of detail.
+	/// </summary>
+	/// <param name="level">Level of detail, with <c>0</c> being the highest.</param>
 	public Vector3 GetCellSize( int level )
 	{
 		var size = BaseCellSize * (1 << level);
@@ -207,7 +218,12 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		return Is2D ? new Vector3( size, size, 0f ) : size;
 	}
 
-	private CellIndex GetCellIndex( Vector3 worldPosition, int level )
+	/// <summary>
+	/// Gets the index of the cell containing a given world position at a particular detail level.
+	/// </summary>
+	/// <param name="worldPosition">Position in the world to find the containing cell index for.</param>
+	/// <param name="level">Level of detail, with <c>0</c> being the highest.</param>
+	public CellIndex GetCellIndex( Vector3 worldPosition, int level )
 	{
 		var cellSize = GetCellSize( level );
 		var localPos = Transform.World.PointToLocal( worldPosition );
@@ -340,9 +356,7 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 
 		var cell = go.Components.Create<WorldCell>();
 
-		cell.Index = cellIndex;
-		cell.Size = size;
-		cell.Opacity = 0f;
+		cell.Initialize( this, cellIndex );
 
 		_levels[cellIndex.Level].Cells.Add( cellIndex.Position, cell );
 
