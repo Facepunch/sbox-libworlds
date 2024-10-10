@@ -132,17 +132,17 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 			{
 				if ( origin.MaxLevel is { } maxLevel )
 				{
-					AddLoadOrigin( origin.Transform.Position, maxLevel );
+					AddLoadOrigin( origin.WorldPosition, maxLevel );
 				}
 				else
 				{
-					AddLoadOrigin( origin.Transform.Position );
+					AddLoadOrigin( origin.WorldPosition );
 				}
 			}
 
 			foreach ( var camera in Scene.GetAllComponents<CameraComponent>() )
 			{
-				AddLoadOrigin( camera.Transform.Position );
+				AddLoadOrigin( camera.WorldPosition );
 			}
 		}
 
@@ -185,7 +185,7 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 			level );
 	}
 
-	private Vector3Int[] _loadKernel;
+	private Vector3Int[] _loadKernel = null!;
 
 	private void UpdateLevelCount()
 	{
@@ -297,7 +297,7 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 			? $"Cell {cellIndex.Level} - {cellIndex.Position.x} {cellIndex.Position.y}"
 			: $"Cell {cellIndex.Level} - {cellIndex.Position.x} {cellIndex.Position.y} {cellIndex.Position.z}" )
 		{
-			Transform = { Position = cellIndex.Position * size },
+			WorldPosition = cellIndex.Position * size,
 			Parent = GameObject,
 			Flags = GameObjectFlags.NotSaved | GameObjectFlags.Hidden,
 			NetworkMode = NetworkMode.Never
