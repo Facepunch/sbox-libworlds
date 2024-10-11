@@ -50,7 +50,7 @@ public delegate void WorldCellOpacityChanged( WorldCell cell, float opacity );
 /// Loaded cells will fade in and out their <see cref="Opacity"/> based on distance from the camera.
 /// </para>
 /// </summary>
-[Hide]
+[Hide, Icon( "grid_3x3" )]
 public sealed class WorldCell : Component, Component.ExecuteInEditor
 {
 	private float _opacity = 0f;
