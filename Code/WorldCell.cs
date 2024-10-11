@@ -55,7 +55,7 @@ public sealed class WorldCell : Component, Component.ExecuteInEditor
 {
 	private float _opacity = 0f;
 
-	public StreamingWorld World { get; private set; }
+	public StreamingWorld World { get; private set; } = null!;
 
 	/// <summary>
 	/// This cell's coordinate in the grid of its detail level.
