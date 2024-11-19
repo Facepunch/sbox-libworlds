@@ -166,8 +166,12 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 		UpdateCells();
 	}
 
+	private bool _anyLoadOrigins;
+
 	private void FindLoadOrigins()
 	{
+		_anyLoadOrigins = false;
+
 		if ( !Game.IsEditor || Game.IsPlaying || Game.IsPaused )
 		{
 			foreach ( var origin in Scene.GetAllComponents<LoadOrigin>() )
@@ -182,13 +186,16 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 				}
 			}
 
-			foreach ( var camera in Scene.GetAllComponents<CameraComponent>() )
+			if ( !_anyLoadOrigins )
 			{
-				AddLoadOrigin( camera.WorldPosition );
+				foreach ( var camera in Scene.GetAllComponents<CameraComponent>() )
+				{
+					AddLoadOrigin( camera.WorldPosition );
+				}
 			}
 		}
 
-		if ( EditorCameraTransform is { Position: var editorCamPos } )
+		if ( !_anyLoadOrigins && EditorCameraTransform is { Position: var editorCamPos } )
 		{
 			AddLoadOrigin( editorCamPos );
 		}
@@ -201,6 +208,8 @@ public sealed class StreamingWorld : Component, Component.ExecuteInEditor
 
 	private void AddLoadOrigin( Vector3 position, int maxLevel )
 	{
+		_anyLoadOrigins = true;
+
 		for ( var i = 0; i < maxLevel && i < DetailLevels; ++i )
 		{
 			_levels[i].LoadOrigins.Add( GetCellIndex( position, i ).Position );
